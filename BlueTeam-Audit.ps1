@@ -6,6 +6,8 @@
     Outputs a structured Markdown report.
 .AUTHOR
     Aung Myat Thu [w01f]
+.USAGE 
+    powershell -ExecutionPolicy Bypass -File .\BlueTeam-Audit.ps1
 #>
 
 # Output Markdown file
