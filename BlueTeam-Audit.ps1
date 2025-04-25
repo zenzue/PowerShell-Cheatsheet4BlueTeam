@@ -59,14 +59,32 @@ foreach ($section in $sections) {
 
 function Get-WindowsStartupPrograms {
     $results = @()
+    $suspiciousPaths = @("appdata", "temp", "recycle", "programdata\\.*\\temp")
+    $suspiciousExtensions = @(".js", ".vbs", ".bat", ".ps1", ".hta")
+    $suspiciousPatterns = @("powershell", "cmd.exe", "-enc", "frombase64string")
+
+    function Is-Suspicious($path) {
+        $lower = $path.ToLower()
+        foreach ($pat in $suspiciousPaths) {
+            if ($lower -match $pat) { return $true }
+        }
+        foreach ($ext in $suspiciousExtensions) {
+            if ($lower -like "*$ext") { return $true }
+        }
+        foreach ($str in $suspiciousPatterns) {
+            if ($lower -like "*$str*") { return $true }
+        }
+        return $false
+    }
 
     $userStartupPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
     if (Test-Path $userStartupPath) {
         Get-ChildItem -Path $userStartupPath -Force | ForEach-Object {
             $results += [PSCustomObject]@{
-                Source  = "Startup Folder (Current User)"
-                Name    = $_.Name
-                Path    = $_.FullName
+                Source     = "Startup Folder (Current User)"
+                Name       = $_.Name
+                Path       = $_.FullName
+                Suspicious = Is-Suspicious($_.FullName)
             }
         }
     }
@@ -75,9 +93,10 @@ function Get-WindowsStartupPrograms {
     if (Test-Path $allUsersStartupPath) {
         Get-ChildItem -Path $allUsersStartupPath -Force | ForEach-Object {
             $results += [PSCustomObject]@{
-                Source  = "Startup Folder (All Users)"
-                Name    = $_.Name
-                Path    = $_.FullName
+                Source     = "Startup Folder (All Users)"
+                Name       = $_.Name
+                Path       = $_.FullName
+                Suspicious = Is-Suspicious($_.FullName)
             }
         }
     }
@@ -87,9 +106,10 @@ function Get-WindowsStartupPrograms {
         Get-ItemProperty -Path $regCU | ForEach-Object {
             $_.PSObject.Properties | ForEach-Object {
                 $results += [PSCustomObject]@{
-                    Source = "Registry (HKCU)"
-                    Name   = $_.Name
-                    Path   = $_.Value
+                    Source     = "Registry (HKCU)"
+                    Name       = $_.Name
+                    Path       = $_.Value
+                    Suspicious = Is-Suspicious($_.Value)
                 }
             }
         }
@@ -100,9 +120,10 @@ function Get-WindowsStartupPrograms {
         Get-ItemProperty -Path $regLM | ForEach-Object {
             $_.PSObject.Properties | ForEach-Object {
                 $results += [PSCustomObject]@{
-                    Source = "Registry (HKLM)"
-                    Name   = $_.Name
-                    Path   = $_.Value
+                    Source     = "Registry (HKLM)"
+                    Name       = $_.Name
+                    Path       = $_.Value
+                    Suspicious = Is-Suspicious($_.Value)
                 }
             }
         }
@@ -153,10 +174,10 @@ Write-Content ($connections | Sort-Object RemoteIP | Format-Table | Out-String)
 Write-Header "Startup Programs"
 Write-Content (Get-CimInstance Win32_StartupCommand | Format-Table Name, Command, Location, User -AutoSize | Out-String)
 
-# --- Windows Startup Programs (Registry + Folders) ---
+# --- Windows Startup Programs (Registry + Folders) with Suspicion Flag ---
 Write-Header "Windows Startup Programs (Registry + Folders)"
 $startupItems = Get-WindowsStartupPrograms
-Write-Content ($startupItems | Format-Table -AutoSize | Out-String)
+Write-Content ($startupItems | Sort-Object Suspicious -Descending | Format-Table -AutoSize | Out-String)
 
 # --- Autorun Registry Keys ---
 Write-Header "Registry Autoruns (HKLM Run)"
