@@ -6,14 +6,13 @@
     Outputs a structured Markdown report.
 .AUTHOR
     Aung Myat Thu [w01f]
-.USAGE 
-    powershell -ExecutionPolicy Bypass -File .\BlueTeam-Audit.ps1
 #>
 
 # Output Markdown file
 $report = "$env:USERPROFILE\Desktop\SystemAudit-Report.md"
 New-Item -Path $report -ItemType File -Force | Out-Null
 
+# Markdown formatting helpers
 function Write-Header($title) {
     Add-Content -Path $report -Value "`n## $title`n"
 }
@@ -23,24 +22,107 @@ function Write-Sub($subtitle) {
 }
 
 function Write-Content($content) {
-    Add-Content -Path $report -Value "``````powershell`n$content`n``````"
+    Add-Content -Path $report -Value "```powershell`n$content`n```"
+}
+
+# --- Markdown TOC ---
+Add-Content -Path $report -Value "# System Audit Report"
+Add-Content -Path $report -Value "_Generated: $(Get-Date)_`n"
+Add-Content -Path $report -Value "## Table of Contents"
+$sections = @(
+    "System Information",
+    "User Sessions",
+    "Local Users & Groups",
+    "Running Processes (Top 15 by CPU)",
+    "Network Connections (Established)",
+    "Startup Programs",
+    "Registry Autoruns (HKLM Run)",
+    "Security Event Logs",
+    "File System: Recently Modified Files (Last 24 Hours)",
+    "Shadow Copies",
+    "Installed Hotfixes",
+    "File Hash: LSASS",
+    "Suspicious Services (cmd.exe or powershell in path)",
+    "Scheduled Tasks",
+    "DNS Cache Dump",
+    "Firewall Rules",
+    "Sysmon Events (Event ID 1 - Process Create)",
+    "Users with Potential Privilege Escalation"
+)
+
+$i = 1
+foreach ($section in $sections) {
+    $anchor = $section -replace '[^a-zA-Z0-9 ]', '' -replace ' ', '-'
+    Add-Content -Path $report -Value "$i. [$section](#$anchor)"
+    $i++
+}
+
+function Get-WindowsStartupPrograms {
+    $results = @()
+
+    $userStartupPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+    if (Test-Path $userStartupPath) {
+        Get-ChildItem -Path $userStartupPath -Force | ForEach-Object {
+            $results += [PSCustomObject]@{
+                Source  = "Startup Folder (Current User)"
+                Name    = $_.Name
+                Path    = $_.FullName
+            }
+        }
+    }
+
+    $allUsersStartupPath = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Startup"
+    if (Test-Path $allUsersStartupPath) {
+        Get-ChildItem -Path $allUsersStartupPath -Force | ForEach-Object {
+            $results += [PSCustomObject]@{
+                Source  = "Startup Folder (All Users)"
+                Name    = $_.Name
+                Path    = $_.FullName
+            }
+        }
+    }
+
+    $regCU = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+    if (Test-Path $regCU) {
+        Get-ItemProperty -Path $regCU | ForEach-Object {
+            $_.PSObject.Properties | ForEach-Object {
+                $results += [PSCustomObject]@{
+                    Source = "Registry (HKCU)"
+                    Name   = $_.Name
+                    Path   = $_.Value
+                }
+            }
+        }
+    }
+
+    $regLM = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run"
+    if (Test-Path $regLM) {
+        Get-ItemProperty -Path $regLM | ForEach-Object {
+            $_.PSObject.Properties | ForEach-Object {
+                $results += [PSCustomObject]@{
+                    Source = "Registry (HKLM)"
+                    Name   = $_.Name
+                    Path   = $_.Value
+                }
+            }
+        }
+    }
+
+    return $results
 }
 
 # --- System Info ---
 Write-Header "System Information"
 $sysinfo = Get-ComputerInfo | Select-Object CsName, WindowsVersion, OsArchitecture, CsDomain, BiosSerialNumber
-Write-Content ($sysinfo | Format-List | Out-String)
-
-# --- Boot Time & Uptime ---
 Write-Sub "Uptime & Boot Time"
 $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
 $uptime = New-TimeSpan -Start $boot
 Write-Content "Boot Time: $boot`nUptime: $uptime"
+Write-Content ($sysinfo | Format-List | Out-String)
 
 # --- User Sessions ---
 Write-Header "User Sessions"
-$users = query user
-Write-Content $users
+Write-Content (query user)
 
 # --- Local Users & Groups ---
 Write-Header "Local Users & Groups"
@@ -71,6 +153,11 @@ Write-Content ($connections | Sort-Object RemoteIP | Format-Table | Out-String)
 Write-Header "Startup Programs"
 Write-Content (Get-CimInstance Win32_StartupCommand | Format-Table Name, Command, Location, User -AutoSize | Out-String)
 
+# --- Windows Startup Programs (Registry + Folders) ---
+Write-Header "Windows Startup Programs (Registry + Folders)"
+$startupItems = Get-WindowsStartupPrograms
+Write-Content ($startupItems | Format-Table -AutoSize | Out-String)
+
 # --- Autorun Registry Keys ---
 Write-Header "Registry Autoruns (HKLM Run)"
 Write-Content (Get-ItemProperty "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run" | Out-String)
@@ -99,7 +186,7 @@ Write-Content (Get-WmiObject Win32_ShadowCopy | Out-String)
 Write-Header "Installed Hotfixes"
 Write-Content (Get-HotFix | Format-Table -AutoSize | Out-String)
 
-# --- LSASS Hash Example ---
+# --- LSASS File Hash ---
 Write-Header "File Hash: LSASS"
 $file = "C:\Windows\System32\lsass.exe"
 if (Test-Path $file) {
@@ -120,7 +207,7 @@ Write-Content ($suspServices | Format-Table Name, StartName, PathName, State -Au
 Write-Header "Scheduled Tasks"
 Write-Content (Get-ScheduledTask | Format-Table TaskName, TaskPath, State | Out-String)
 
-# --- DNS Cache Dump ---
+# --- DNS Cache ---
 Write-Header "DNS Cache Dump"
 Write-Content (ipconfig /displaydns)
 
@@ -128,7 +215,7 @@ Write-Content (ipconfig /displaydns)
 Write-Header "Firewall Rules"
 Write-Content (Get-NetFirewallRule | Where-Object { $_.Enabled -eq 'True' } | Format-Table DisplayName, Direction, Action, Enabled -AutoSize | Out-String)
 
-# --- Sysmon Log Sample (if available) ---
+# --- Sysmon Logs (if available) ---
 Write-Header "Sysmon Events (Event ID 1 - Process Create)"
 if (Get-WinEvent -ListLog * | Where-Object {$_.LogDisplayName -like "*Sysmon*"} ) {
     $sysmon = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Sysmon/Operational'; Id=1} -MaxEvents 5
@@ -137,13 +224,13 @@ if (Get-WinEvent -ListLog * | Where-Object {$_.LogDisplayName -like "*Sysmon*"} 
     Write-Content "Sysmon not detected on this system."
 }
 
-# --- User Privileges ---
+# --- Privilege Escalation Risks ---
 Write-Header "Users with Potential Privilege Escalation"
 $adminUsers = Get-LocalGroupMember -Group "Administrators"
 Write-Content ($adminUsers | Format-Table Name, ObjectClass, PrincipalSource | Out-String)
 
-# --- Final Notice ---
-Add-Content -Path $report -Value "`n---`n_Audit completed on $(Get-Date)_"
+# --- Final Line ---
+Add-Content -Path $report -Value "`n---`n_Report generated by Aung Myat Thu [w01f] on $(Get-Date)_"
 
-# --- Open Report ---
+# --- Open Markdown Report in Notepad ---
 Start-Process notepad.exe $report
